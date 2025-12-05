@@ -83,10 +83,10 @@ Upon launching, you can select between:
 ### Core Services
 *   **`geminiService.ts`**: Manages all LLM interactions. It includes the `generatePlaybookFromDocument` and `analyzeDocumentWithGemini` functions. It utilizes an **IR Parser** (`irParser.ts`) to convert natural language AI output into structured data, offering higher reliability than strict JSON mode.
 *   **`wordAdapter.ts`**: A custom implementation that unzips `.docx` files in the browser, reads the `document.xml` and `numbering.xml`, and reconstructs the text and numbering styles into a "Shadow Document" structure used for analysis.
-*   **`SuperdocEditor.tsx`**: Wraps the ProseMirror editor. It handles the "Single Transaction" diffing logic, ensuring that when AI suggests a change, it is applied as a granular set of insertions and deletions (Track Changes) rather than a full text replacement.
+*   **`SuperdocEditor.tsx`**: Wraps the ProseMirror editor. It handles the **Position Mapping** and **Delta Tracking** logic (`diff-match-patch`). When AI suggests a change, the system maps the simple text replacement to granular insertions and deletions in the editor's node structure, ensuring robust Track Changes compatibility.
 
 ### Data Models
-*   **`ShadowDocument`**: A lightweight JSON representation of the document used for analysis.
+*   **`ShadowDocument`**: The lightweight JSON interface (defined in `types.ts`) used as the **Analysis Payload**. It represents a snapshot of the document state (paragraphs, metadata) sent to the AI service. It is distinct from the live editor state.
 *   **`Playbook`**: A collection of `PlaybookRule` objects (Topic, Preferred Position, Risk Criteria).
 *   **`AnalysisFinding`**: The result of an AI check, linking a specific paragraph ID to a risk assessment.
 
