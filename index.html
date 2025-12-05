@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Contract AI Reviewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Mammoth.js for client-side DOCX parsing (Optional fallback) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <!-- JSZip for accessing raw DOCX XML -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- docx.js for client-side DOCX generation -->
+    <script src="https://cdn.jsdelivr.net/npm/docx@7.1.0/build/index.js"></script>
+    <!-- diff-match-patch for change tracking analysis -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
+    
+    <!-- Superdoc CDN (Styles & Script) -->
+    <link rel="stylesheet" href="https://unpkg.com/superdoc/dist/style.css" />
+    <script src="https://unpkg.com/superdoc/dist/superdoc.umd.js" crossorigin="anonymous"></script>
+
+    <style>
+      /* Custom scrollbar for taskpane feel */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0"
+  }
+}
+</script>
+</head>
+  <body class="bg-gray-50 text-slate-900">
+    <div id="root"></div>
+  </body>
+</html>

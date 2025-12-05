@@ -1,0 +1,5 @@
+{
+  "name": "Contract Playbook Reviewer",
+  "description": "A split-architecture contract review tool for MS Word using Gemini for clause analysis and drafting.",
+  "requestFramePermissions": []
+}
