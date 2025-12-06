@@ -104,4 +104,8 @@ To access the test suite, click the small "System Tests" button on the main uplo
 
 ## 📄 License
 
-See LICENSE.MD
+See [LICENSE.md](LICENSE.md)
+
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
