@@ -31,7 +31,7 @@ export interface ClauseAssemblyOutput {
 }
 
 export interface SuperdocEditorHandle {
-    exportDocument: (name: string) => Promise<boolean>;
+    exportDocument: (name: string) => Promise<void>;
     setDocumentContent: (html: string) => void;
     applyTrackedChange: (originalText: string, newText: string, attribution?: string) => Promise<boolean>;
     structureDocument: () => void;
@@ -42,68 +42,6 @@ export interface SuperdocEditorHandle {
 }
 
 const DEFAULT_USER = { name: 'Reviewer', email: 'reviewer@example.com' };
-
-// --- ROBUST JSON CLEANING STRATEGY ---
-
-// Helper: Recursively validate and count node types for debugging
-const logNodeTypes = (node: any, counts: Record<string, number> = {}) => {
-    if (!node || typeof node !== 'object') return counts;
-    
-    const type = node.type || '[MISSING_TYPE]';
-    counts[type] = (counts[type] || 0) + 1;
-
-    if (node.content && Array.isArray(node.content)) {
-        node.content.forEach((child: any) => logNodeTypes(child, counts));
-    }
-    return counts;
-};
-
-// Helper: Recursively clean the tree.
-// RETURNS: An ARRAY of valid nodes.
-export const cleanNodeTree = (node: any): any[] => {
-    // 1. Invalid Node Check
-    if (!node || typeof node !== 'object') return [];
-    
-    // STRICT: Every node MUST have a type.
-    if (!node.type) {
-        return [];
-    }
-
-    // 2. Blacklist: Strip Metadata Nodes that crash exporters
-    if (['bookmarkStart', 'bookmarkEnd', 'tab'].includes(node.type)) {
-        return [];
-    }
-
-    // 3. Unwrap Logic: Flatten unsupported containers
-    // We unwrap:
-    // - 'clause' (our custom AI wrapper)
-    // - 'run' (Word import artifact, often breaks text)
-    // - 'orderedList', 'bulletList', 'listItem' (CamelCase types often missing in standard exporters)
-    // - 'table', 'tableRow', 'tableCell' (CamelCase types often missing in standard exporters)
-    // - 'tableHeader'
-    // This effectively flattens the doc to linear paragraphs to guarantee export success.
-    const NODES_TO_UNWRAP = [
-        'clause', 'run', 
-        'orderedList', 'bulletList', 'listItem', 
-        'table', 'tableRow', 'tableCell', 'tableHeader'
-    ];
-
-    if (NODES_TO_UNWRAP.includes(node.type)) {
-        if (!node.content || !Array.isArray(node.content)) return [];
-        // Flatten children by recursing on them
-        return node.content.flatMap((child: any) => cleanNodeTree(child));
-    }
-
-    // 4. Standard Node Preservation
-    const newNode = { ...node };
-
-    // Recurse on content if it exists
-    if (newNode.content && Array.isArray(newNode.content)) {
-        newNode.content = newNode.content.flatMap((child: any) => cleanNodeTree(child));
-    }
-
-    return [newNode];
-};
 
 const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
     file,
@@ -253,82 +191,65 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
     };
 
     useImperativeHandle(ref, () => ({
-        exportDocument: async (filename: string): Promise<boolean> => {
+        exportDocument: async (filename: string) => {
             const editor = editorInstanceRef.current;
             if (!editor || !editor.activeEditor) {
                 alert('Editor not initialized');
-                return false;
+                return;
             }
 
             const safeName = filename.endsWith('.docx') ? filename : `${filename}.docx`;
             console.log(`[Superdoc] Attempting export of ${safeName}...`);
 
-            const { state, view } = editor.activeEditor;
-            
-            // --- JSON TRANSFORMATION STRATEGY ---
-            console.log('📦 Preparing clean document structure (JSON Strategy)...');
-            
-            try { 
-                if (editor.activeEditor.commands.trackChanges) {
-                    editor.activeEditor.commands.trackChanges(false);
-                }
-            } catch(e) { console.warn("Could not disable track changes", e); }
 
             try {
-                // 1. Get JSON
-                const originalJSON = state.doc.toJSON();
+                const { state, view } = editor.activeEditor;
 
-                // 2. Clean JSON (Returns array of nodes)
-                const cleanNodes = cleanNodeTree(originalJSON);
-                
-                let cleanJSON = cleanNodes.length > 0 ? cleanNodes[0] : null;
+                console.log('� Preparing document for export...');
 
-                if (!cleanJSON || cleanJSON.type !== 'doc') {
-                    throw new Error("Failed to generate valid clean document JSON.");
-                }
-
-                // FIX: Ensure 'doc' does not contain direct text nodes (which unwrap can produce)
-                // ProseMirror Schema requires 'doc' to contain blocks.
-                if (cleanJSON.content && Array.isArray(cleanJSON.content)) {
-                    cleanJSON.content = cleanJSON.content.map((child: any) => {
-                         if (child.type === 'text') {
-                             // Wrap orphan text in paragraph
-                             return { type: 'paragraph', content: [child] };
-                         }
-                         return child;
-                    });
-                }
-
-                // DIAGNOSTIC: Log types to ensure no ghost nodes
-                const nodeCounts = logNodeTypes(cleanJSON);
-                console.log("Pre-Export Node Types:", nodeCounts);
-
-                // 3. Create Clean Doc Node from Schema
-                const schema = state.schema;
-                const cleanDocNode = schema.nodeFromJSON(cleanJSON);
-
-                // 4. Dispatch Replace
+                // UNWRAP all clause nodes before export
+                // Superdoc's DOCX exporter doesn't recognize custom 'clause' nodes
                 const tr = state.tr;
-                tr.replaceWith(0, state.doc.content.size, cleanDocNode);
-                tr.setMeta('addToHistory', true); 
-                tr.setMeta('track-changes-skip', true); 
+                let modified = false;
+                const nodesToUnwrap: Array<{ pos: number, node: any }> = [];
 
-                view.dispatch(tr);
-                
-                await new Promise(r => setTimeout(r, 500));
-
-                // Execute Export
-                const exportedBlob = await editor.activeEditor.exportDocx();
-                
-                if (!exportedBlob || !(exportedBlob instanceof Blob)) {
-                    throw new Error('exportDocx returned invalid blob');
-                }
-
-                // Re-wrap with specific DOCX mime type to prevent browser from defaulting to ZIP
-                const blob = new Blob([exportedBlob], { 
-                    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" 
+                // Collect all clause nodes (traverse in reverse for position stability)
+                state.doc.descendants((node: any, pos: number) => {
+                    if (node.type.name === 'clause') {
+                        nodesToUnwrap.push({ pos, node });
+                    }
+                    return true;
                 });
 
+                console.log(`Found ${nodesToUnwrap.length} clause nodes to unwrap`);
+
+                // Unwrap clauses (process in reverse to maintain positions)
+                for (let i = nodesToUnwrap.length - 1; i >= 0; i--) {
+                    const { pos, node } = nodesToUnwrap[i];
+                    const from = pos;
+                    const to = pos + node.nodeSize;
+
+                    // Replace clause wrapper with its content
+                    tr.replaceWith(from, to, node.content);
+                    modified = true;
+                }
+
+                if (modified) {
+                    view.dispatch(tr);
+                    console.log('✓ Unwrapped clause nodes');
+                    // Wait for DOM update
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                // Now export without clause wrappers
+                console.log('🚀 Calling exportDocx...');
+                const blob = await editor.activeEditor.exportDocx();
+
+                if (!blob || !(blob instanceof Blob)) {
+                    throw new Error('exportDocx did not return a valid Blob');
+                }
+
+                // Download the blob
                 const url = window.URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = url;
@@ -337,25 +258,12 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
                 link.click();
                 document.body.removeChild(link);
                 window.URL.revokeObjectURL(url);
-                console.log(`✅ Export successful`);
-                return true;
+
+                console.log(`✅ Export successful: ${safeName}`);
 
             } catch (error: any) {
                 console.error('❌ Export failed:', error);
-                alert(`Export failed: ${error.message}`);
-                return false;
-            } finally {
-                // Restore State
-                console.log('Restoring editor state...');
-                try {
-                    editor.activeEditor.commands.undo();
-                } catch(e) { console.error("Undo failed", e); }
-                
-                try {
-                    if (editor.activeEditor.commands.trackChanges) {
-                        editor.activeEditor.commands.trackChanges(true);
-                    }
-                } catch(e) {}
+                alert(`Failed to export document: ${error.message || 'Unknown error'}`);
             }
         },
         setDocumentContent: (html: string) => {
@@ -460,13 +368,14 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
         updateClause: async (clauseId: string, newText: string, attribution?: string): Promise<boolean> => {
             const editor = editorInstanceRef.current;
             if (!editor || !editor.activeEditor) return false;
-            
+            const { state, view } = editor.activeEditor;
+
             console.group(`[Diffing] Update Clause ${clauseId}`);
 
-            const { state, view } = editor.activeEditor;
             let clausePos: number | null = null;
             let clauseNode: any = null;
 
+            // Find the node
             state.doc.descendants((node: any, pos: number) => {
                 if (node.type.name === 'clause' && node.attrs.id === clauseId) {
                     clausePos = pos;
@@ -478,22 +387,51 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
 
             if (clausePos === null || !clauseNode) {
                 console.error(`Clause node not found for ID: ${clauseId}`);
+                // Diagnostic: Log all available clauses to help debug
+                const availableIds: string[] = [];
+                state.doc.descendants((node: any) => {
+                    if (node.type.name === 'clause') {
+                        availableIds.push(node.attrs.id);
+                    }
+                    return true;
+                });
+                console.log("Available Clause IDs in Document:", availableIds);
                 console.groupEnd();
                 return false;
             }
 
+            // 1. Force Track Changes ON
             try {
                 let modeEnabled = false;
+
+                // Approach 1: Use editorInstance.setDocumentMode
                 if (typeof editor.setDocumentMode === 'function') {
                     editor.setDocumentMode('suggesting');
-                    modeEnabled = true;
-                } else if (editor.activeEditor?.commands?.trackChanges) {
-                    editor.activeEditor.commands.trackChanges(true);
+                    console.log('✓ Track changes enabled via editor.setDocumentMode');
                     modeEnabled = true;
                 }
-                if (!modeEnabled) console.warn('⚠️ Could not enable track changes');
-            } catch (error) { console.error('Track changes error:', error); }
+                // Approach 2: Use window.superdoc (global instance)
+                else if ((window as any).superdoc && (window as any).superdoc.setDocumentMode) {
+                    (window as any).superdoc.setDocumentMode('suggesting');
+                    console.log('✓ Track changes enabled via window.superdoc');
+                    modeEnabled = true;
+                }
+                // Approach 3: Use editor.activeEditor.commands
+                else if (editor.activeEditor?.commands?.trackChanges) {
+                    editor.activeEditor.commands.trackChanges(true);
+                    console.log('✓ Track changes enabled via commands');
+                    modeEnabled = true;
+                }
 
+                if (!modeEnabled) {
+                    console.warn('⚠️ Could not enable track changes - no method succeeded');
+                }
+            } catch (error) {
+                console.error('Track changes enablement error:', error);
+            }
+
+            // 2. Build position map: extracted text index -> document position
+            // This accounts for non-text nodes (run, etc.) between text nodes
             const positionMap: number[] = [];
             let textBuffer = '';
 
@@ -501,6 +439,7 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
                 if (node.isText) {
                     const absolutePos = (clausePos as number) + 1 + pos;
                     const text = node.text || '';
+
                     for (let i = 0; i < text.length; i++) {
                         positionMap.push(absolutePos + i);
                     }
@@ -515,44 +454,92 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
                 return false;
             }
 
-            const diffs = calculateWordDiff(textBuffer, newText);
+            const docText = textBuffer;
 
+            console.log('Position map built:', {
+                textLength: docText.length,
+                mapLength: positionMap.length,
+                firstPos: positionMap[0],
+                lastPos: positionMap[positionMap.length - 1],
+                first20Chars: docText.substring(0, 20)
+            });
+
+            // 3. Calculate Diff
+            const diffs = calculateWordDiff(docText, newText);
+
+            // 4. Apply diffs in a SINGLE TRANSACTION
+            // ProseMirror handles position mapping automatically when all ops are in one transaction
+            console.log('=== Starting Diff Application ===');
+            console.log('Original text:', docText.substring(0, 100) + '...');
+            console.log('New text:', newText.substring(0, 100) + '...');
+            console.log('Total operations:', diffs.length);
             const { state: initialState, dispatch } = editor.activeEditor.view;
             let tr = initialState.tr;
-            let textIndex = 0;
-            let mapOffset = 0;
-
-            diffs.forEach((part) => {
+            let textIndex = 0;  // Current index in extracted text
+            let mapOffset = 0;  // Tracks position shift within this transaction
+            diffs.forEach((part, opIndex) => {
                 const token = part.text;
+
+                console.log(`\n--- Operation ${opIndex + 1} ---`);
+                console.log('Type:', part.op === DIFF_EQUAL ? 'EQUAL' : part.op === DIFF_DELETE ? 'DELETE' : 'INSERT');
+                console.log('Token:', JSON.stringify(token.substring(0, 30) + (token.length > 30 ? '...' : '')));
+                console.log('Text index:', textIndex, 'Map offset:', mapOffset);
 
                 if (part.op === DIFF_EQUAL) {
                     textIndex += token.length;
-                } else if (part.op === DIFF_DELETE) {
+                    console.log('→ Advanced text index to:', textIndex);
+                }
+                else if (part.op === DIFF_DELETE) {
                     const baseDocPos = positionMap[textIndex];
                     const endTextIndex = Math.min(textIndex + token.length - 1, positionMap.length - 1);
                     const baseEndDocPos = positionMap[endTextIndex] + 1;
 
+                    // Apply offset from previous operations in this transaction
                     const actualDocPos = baseDocPos + mapOffset;
                     const actualEndDocPos = baseEndDocPos + mapOffset;
 
+                    console.log('Deleting from', actualDocPos, 'to', actualEndDocPos);
+
+                    // Add delete to transaction (don't dispatch yet!)
                     tr = tr.delete(actualDocPos, actualEndDocPos);
 
+                    // Track offset: deletion reduces positions WITHIN this transaction
                     const deletedLength = actualEndDocPos - actualDocPos;
                     mapOffset -= deletedLength;
+                    console.log('Map offset updated:', mapOffset + deletedLength, '→', mapOffset);
+
                     textIndex += token.length;
-                } else if (part.op === DIFF_INSERT) {
+                }
+                else if (part.op === DIFF_INSERT) {
                     const baseDocPos = textIndex < positionMap.length
                         ? positionMap[textIndex]
                         : positionMap[positionMap.length - 1] + 1;
                     const actualDocPos = baseDocPos + mapOffset;
 
+                    console.log('Inserting at', actualDocPos, ':', JSON.stringify(token.substring(0, 20)));
+
+                    // Add insert to transaction (don't dispatch yet!)
                     tr = tr.insertText(token, actualDocPos);
+
+                    // Track offset: insertion increases positions WITHIN this transaction
                     mapOffset += token.length;
+                    console.log('Map offset updated:', mapOffset - token.length, '→', mapOffset);
+
+                    // DON'T advance textIndex (insert doesn't exist in original)
                 }
             });
-
+            // DISPATCH ONCE at the end - this is the key!
+            console.log('\n=== Dispatching Single Transaction ===');
+            console.log('Transaction steps:', tr.steps.length);
             dispatch(tr);
-            
+            console.log('\n=== Diff Application Complete ===');
+            console.log('Final text index:', textIndex);
+            console.log('Final map offset:', mapOffset);
+            console.log('Expected text index:', docText.length);
+            console.log('Match?', textIndex === docText.length);
+
+            // 7. Update Node Status (Mark as pending review)
+            // Use fresh transaction as well
             const { state: finalState, dispatch: finalDispatch } = editor.activeEditor.view;
             const finalTr = finalState.tr.setNodeMarkup(clausePos, undefined, { ...clauseNode.attrs, status: 'pending' });
             finalDispatch(finalTr);
@@ -578,24 +565,37 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
         });
     };
 
+    // Setup click listener for clearing selection
     useEffect(() => {
         if (!activeFindingId || !onClearSelection || status !== 'ready') return;
 
         const container = document.getElementById(CONTAINER_ID);
         const handleClick = (e: MouseEvent) => {
+            // If the click is inside the editor but NOT on the active clause, clear selection.
             const target = e.target as HTMLElement;
             const clickedClause = target.closest('.sd-clause-node');
+
+            // If we clicked ANY clause...
             if (clickedClause) {
                 const clickedId = clickedClause.getAttribute('data-clause-id');
+                // ...and it's not the currently active one
                 if (clickedId !== activeFindingId) {
+                    // Then we clear selection (so the user can edit the clicked clause or others)
+                    console.log("Superdoc: Clicked inactive clause - clearing focus.");
                     onClearSelection();
                 }
+                // If it IS the active one, do nothing (keep focus)
             } else {
+                // Clicked empty space or non-clause content -> clear selection
+                // Make sure we aren't clicking the toolbar (if this listener is on the wrapper)
+                // But here we are on the CONTAINER_ID which is the content area.
+                console.log("Superdoc: Clicked editor background - clearing focus.");
                 onClearSelection();
             }
         };
 
         if (container) {
+            // Use capture to ensure we see the click even if ProseMirror stops propagation
             container.addEventListener('click', handleClick, true);
         }
         return () => {
@@ -628,6 +628,7 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
             const checkLibrary = async () => {
                 if (!isMounted) return;
                 const w = window as any;
+
                 const globalLib = getCandidate(w.SuperDocLibrary) || getCandidate(w.SuperDoc) || getCandidate(w.superdoc) || getCandidate(w.Superdoc);
 
                 if (!globalLib) {
@@ -716,6 +717,7 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
         return () => { isMounted = false; cleanup(); };
     }, [file, readOnly, user]);
 
+    // Scroll to active clause when it changes
     useEffect(() => {
         if (!activeFindingId || status !== 'ready') return;
 
@@ -777,9 +779,12 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
       background-color: rgba(255, 251, 235, 0.3);
   }
   
+  /* ACTIVE CLAUSE HIGHLIGHTING */
   ${activeFindingId ? `
   .sd-clause-node:not([data-clause-id="${activeFindingId}"]) {
       opacity: 0.5;
+      /* Removed pointer-events: none so clicks still register on the element 
+         and bubble to our capture listener to clear selection */
   }
   
   .sd-clause-node[data-clause-id="${activeFindingId}"] {

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { ReviewSessionState, AnalysisFinding, AppMode, Playbook } from './types';
 import { wordAdapter } from './services/wordAdapter';
@@ -328,6 +329,40 @@ export default function App() {
             await editorRef.current.runAssemblyTestSuite();
         }
     };
+    
+    // Integration Test: Inject clauses and export via Editor
+    const handleIntegrationExportTest = async (): Promise<boolean> => {
+        if (!editorRef.current) {
+             console.error("Editor not initialized for export test");
+             return false;
+        }
+        
+        try {
+            // Seed content with nested clauses
+            const testHtml = `
+                <h1>Integration Test Document</h1>
+                <p>Root paragraph with standard text.</p>
+                <div data-type="clause" data-clause-id="c1" class="sd-clause-node" data-risk="red">
+                    <p>Clause Level 1 (Top)</p>
+                    <div data-type="clause" data-clause-id="c2" class="sd-clause-node" data-risk="yellow">
+                         <p>Clause Level 2 (Nested)</p>
+                    </div>
+                </div>
+                <p>Closing paragraph.</p>
+            `;
+            
+            editorRef.current.setDocumentContent(testHtml);
+            
+            // Wait for render/extensions to process
+            await new Promise(r => setTimeout(r, 500));
+            
+            // Trigger actual export
+            return await editorRef.current.exportDocument('Superdoc_Recursive_Export_Test');
+        } catch (e) {
+            console.error("Integration Export Test Failed:", e);
+            return false;
+        }
+    };
 
     const handleCardClick = useCallback((finding: AnalysisFinding) => {
         setSession(prev => ({ ...prev, activeFindingId: finding.target_id }));
@@ -379,6 +414,7 @@ export default function App() {
         setDebugClauses([]);
         setShowTestRunner(false);
         setIsEditorReady(false);
+        setMobileMenuOpen(false);
     };
 
     const handleSaveAs = () => {
@@ -396,6 +432,7 @@ export default function App() {
         } else {
             console.error('❌ No editorRef - cannot export!');
         }
+        setMobileMenuOpen(false);
     };
 
     // Render logic for the Editor
@@ -408,7 +445,7 @@ export default function App() {
         if (showTestRunner) {
             return (
                 <div className="flex-1 p-4 overflow-hidden">
-                    <TestSuiteRunner />
+                    <TestSuiteRunner onRunExportIntegration={handleIntegrationExportTest} />
                 </div>
             );
         }
@@ -655,20 +692,42 @@ export default function App() {
                             </span>
                         </div>
 
-                        {/* Mobile Menu Toggle */}
-                        <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 text-gray-600">
-                            <Menu className="w-6 h-6" />
-                        </button>
+                        {/* Right side container for mobile/desktop actions */}
+                        <div className="flex items-center gap-2">
+                             {/* Mobile Save Button */}
+                            <button 
+                                onClick={handleSaveAs} 
+                                className="md:hidden p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                                title="Save Document"
+                            >
+                                <Download className="w-5 h-5" />
+                            </button>
 
-                        <div className="hidden md:flex items-center gap-2">
-                            <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                <Download className="w-4 h-4" /> Save
+                            {/* Mobile Menu Toggle */}
+                            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
+                                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
                             </button>
-                            <div className="w-px h-6 bg-gray-300 mx-1"></div>
-                            <button onClick={handleRestart} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                <RotateCcw className="w-4 h-4" /> Reset
-                            </button>
+                            
+                            {/* Desktop Actions */}
+                            <div className="hidden md:flex items-center gap-2">
+                                <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
+                                    <Download className="w-4 h-4" /> Save
+                                </button>
+                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                                <button onClick={handleRestart} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
+                                    <RotateCcw className="w-4 h-4" /> Reset
+                                </button>
+                            </div>
                         </div>
+
+                        {/* Mobile Dropdown Menu */}
+                        {mobileMenuOpen && (
+                            <div className="absolute top-14 left-0 w-full bg-white shadow-lg border-b border-gray-200 p-4 flex flex-col gap-4 md:hidden z-50 animate-in slide-in-from-top-2">
+                                <button onClick={handleRestart} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-bold border border-gray-200">
+                                    <RotateCcw className="w-5 h-5 text-red-500" /> Reset Session
+                                </button>
+                            </div>
+                        )}
                     </header>
                 )}
 
@@ -784,7 +843,7 @@ export default function App() {
                             <button onClick={() => setShowTestRunner(false)} className="text-gray-400 hover:text-white"><RotateCcw className="w-4 h-4" /></button>
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            <TestSuiteRunner />
+                            <TestSuiteRunner onRunExportIntegration={handleIntegrationExportTest} />
                         </div>
                     </div>
                 </div>

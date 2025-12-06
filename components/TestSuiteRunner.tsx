@@ -1,14 +1,26 @@
 
-import React, { useState } from 'react';
-import { runIRTestSuite, runLiveLLMTestSuite, runBatchComplexityTest, TestResult } from '../services/testSuiteService';
-import { Play, Loader2, CheckCircle, AlertTriangle, XCircle, Terminal, Zap, Bug } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { runIRTestSuite, runLiveLLMTestSuite, runBatchComplexityTest, runExportLogicTest, TestResult } from '../services/testSuiteService';
+import SuperdocEditor, { SuperdocEditorHandle } from './superdoc/SuperdocEditor';
+import { Play, Loader2, CheckCircle, AlertTriangle, XCircle, Terminal, Zap, Bug, FileOutput, Upload, PenTool } from 'lucide-react';
 
-const TestSuiteRunner: React.FC = () => {
+// Access global docx library
+declare var docx: any;
+
+interface TestSuiteRunnerProps {
+    onRunExportIntegration?: () => Promise<boolean>;
+}
+
+const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegration }) => {
     const [isRunning, setIsRunning] = useState(false);
     const [isLiveRunning, setIsLiveRunning] = useState(false);
     const [results, setResults] = useState<TestResult[]>([]);
     const [progress, setProgress] = useState('');
     const [debugLogs, setDebugLogs] = useState<{key: string, data: any}[]>([]);
+    
+    // Sandbox State
+    const [sandboxFile, setSandboxFile] = useState<File | null>(null);
+    const sandboxEditorRef = useRef<SuperdocEditorHandle>(null);
 
     const runMockTests = async () => {
         if (isLiveRunning) return;
@@ -64,6 +76,69 @@ const TestSuiteRunner: React.FC = () => {
         }
     };
 
+    const runSimulateExport = async () => {
+        if (isRunning) return;
+        setIsRunning(true);
+        setResults([]);
+        setProgress('Testing Recursive Unwrap Logic...');
+        
+        try {
+            // 1. Run the Logic Test (No DOCX Lib needed, pure unit test)
+            const logicResults = await runExportLogicTest();
+            setResults(logicResults);
+            
+            // 2. Run Integration Test with Real Editor (if available)
+            if (onRunExportIntegration) {
+                setProgress('Running Editor Integration Export...');
+                const success = await onRunExportIntegration();
+                
+                if (success) {
+                    setResults(prev => [...prev, {
+                        id: 'exp-int', name: 'Superdoc Export Integration', status: 'PASS', message: 'Successfully unwrapped clauses and triggered download.'
+                    }]);
+                } else {
+                    setResults(prev => [...prev, {
+                        id: 'exp-int', name: 'Superdoc Export Integration', status: 'FAIL', message: 'Editor returned failure status.'
+                    }]);
+                }
+            } else {
+                 setResults(prev => [...prev, {
+                    id: 'exp-int', name: 'Superdoc Export Integration', status: 'WARN', message: 'Integration handler not provided.'
+                }]);
+            }
+
+        } catch (e: any) {
+            console.error(e);
+            setResults(prev => [...prev, {
+                id: 'exp-fail', name: 'Export Test Error', status: 'FAIL', message: e.message
+            }]);
+        } finally {
+            setIsRunning(false);
+            setProgress('');
+        }
+    };
+
+    const handleSandboxUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            setSandboxFile(e.target.files[0]);
+        }
+    };
+
+    const handleSandboxStructure = () => {
+        if (sandboxEditorRef.current) {
+            sandboxEditorRef.current.structureDocument();
+            alert("Document Structured! Clauses added.");
+        }
+    };
+
+    const handleSandboxExport = async () => {
+        if (sandboxEditorRef.current && sandboxFile) {
+            const success = await sandboxEditorRef.current.exportDocument(`Sandbox_Test_${sandboxFile.name}`);
+            if (success) alert("Export Success!");
+            else alert("Export Failed - Check Console");
+        }
+    };
+
     const getStatusIcon = (status: string) => {
         switch(status) {
             case 'PASS': return <CheckCircle className="w-4 h-4 text-green-500" />;
@@ -105,14 +180,24 @@ const TestSuiteRunner: React.FC = () => {
                             Live LLM (Full)
                         </button>
                     </div>
-                    <button 
-                        onClick={runF2Test}
-                        disabled={isRunning || isLiveRunning}
-                        className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
-                    >
-                        {isLiveRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bug className="w-3 h-3" />} 
-                        Run F2 (Batch Stress Only)
-                    </button>
+                    <div className="flex gap-2">
+                         <button 
+                            onClick={runF2Test}
+                            disabled={isRunning || isLiveRunning}
+                            className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
+                        >
+                            {isLiveRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bug className="w-3 h-3" />} 
+                            F2 Stress Test
+                        </button>
+                        <button 
+                            onClick={runSimulateExport}
+                            disabled={isRunning || isLiveRunning}
+                            className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
+                        >
+                            <FileOutput className="w-3 h-3" />
+                            Test Export
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -144,6 +229,41 @@ const TestSuiteRunner: React.FC = () => {
                     </tbody>
                 </table>
                 
+                {/* Manual Sandbox Section */}
+                <div className="border-t-4 border-slate-900 bg-gray-50 p-4 min-h-[400px]">
+                    <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2 mb-3">
+                        <PenTool className="w-4 h-4" />
+                        Manual Sandbox (Test Your File)
+                    </h3>
+                    <div className="flex gap-4 mb-4">
+                        <label className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded text-xs cursor-pointer hover:bg-gray-100">
+                            <Upload className="w-3 h-3" />
+                            {sandboxFile ? sandboxFile.name : "Upload DOCX"}
+                            <input type="file" className="hidden" accept=".docx" onChange={handleSandboxUpload} />
+                        </label>
+                        {sandboxFile && (
+                            <>
+                                <button onClick={handleSandboxStructure} className="px-3 py-2 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">
+                                    Step 1: Structure Doc
+                                </button>
+                                <button onClick={handleSandboxExport} className="px-3 py-2 bg-green-600 text-white rounded text-xs hover:bg-green-700">
+                                    Step 2: Test Export
+                                </button>
+                            </>
+                        )}
+                    </div>
+                    {sandboxFile && (
+                        <div className="h-[350px] border border-gray-300 rounded bg-white overflow-hidden relative">
+                             <SuperdocEditor
+                                ref={sandboxEditorRef}
+                                file={sandboxFile}
+                                activeFindingId={null}
+                                readOnly={false}
+                            />
+                        </div>
+                    )}
+                </div>
+
                 {/* Debug Logs Section */}
                 {debugLogs.length > 0 && (
                     <div className="border-t border-gray-200 bg-gray-50 p-3 mt-auto">
@@ -160,7 +280,7 @@ const TestSuiteRunner: React.FC = () => {
                 )}
 
                 {/* Live Progress Overlay */}
-                {isLiveRunning && (
+                {(isLiveRunning || (isRunning && progress)) && (
                     <div className="absolute inset-x-0 bottom-0 bg-indigo-600/90 text-white p-2 text-xs text-center backdrop-blur-sm animate-in slide-in-from-bottom z-10">
                          <div className="flex items-center justify-center gap-2">
                              <Loader2 className="w-3 h-3 animate-spin" />
