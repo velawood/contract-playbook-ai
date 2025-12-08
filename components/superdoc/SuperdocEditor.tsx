@@ -615,21 +615,27 @@ const SuperdocEditor = forwardRef<SuperdocEditorHandle, SuperdocEditorProps>(({
   ${activeFindingId ? `
   /* Dim all other blocks with IDs */
   .editor [data-sd-block-id]:not([data-sd-block-id="${activeFindingId}"]) {
-      opacity: 0.5;
+      opacity: 0.4;
       filter: grayscale(100%);
       transition: opacity 0.3s ease, filter 0.3s ease;
   }
   
   /* Highlight active block */
   .editor [data-sd-block-id="${activeFindingId}"] {
-      background-color: rgba(59, 130, 246, 0.1) !important;
+      background-color: rgba(59, 130, 246, 0.15) !important;
       border-left-color: #3b82f6 !important;
       /* Keep border width same (3px) but change color, use shadow for emphasis */
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
       opacity: 1 !important;
       filter: none !important;
-      color: #000 !important;
       z-index: 10;
+  }
+
+  /* Force text color on all descendants of active block to ensure contrast */
+  .editor [data-sd-block-id="${activeFindingId}"] * {
+      color: #000 !important;
+      fill: #000 !important;
+      opacity: 1 !important;
   }
   ` : ''}
   

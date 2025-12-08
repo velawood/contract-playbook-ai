@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { ReviewSessionState, AnalysisFinding, AppMode, Playbook, RiskLevel } from './types';
 import { wordAdapter } from './services/wordAdapter';
@@ -377,7 +376,8 @@ export default function App() {
                 setSession(prev => ({
                     ...prev,
                     findings: prev.findings.map(f =>
-                        f.target_id === id ? { ...f, status: 'resolved', suggested_text: text } : f
+                        // Use Object.assign to avoid potential spread error "Spread types may only be created from object types"
+                        f.target_id === id ? Object.assign({}, f, { status: 'resolved' as const, suggested_text: text }) : f
                     )
                 }));
                 // Update Styling Metadata
@@ -385,7 +385,8 @@ export default function App() {
                     const next = new Map(prev);
                     const current = next.get(id);
                     if (current) {
-                        next.set(id, { ...current, status: 'pending' }); // Mark visually as pending
+                        // Use Object.assign to avoid potential spread error
+                        next.set(id, Object.assign({}, current, { status: 'pending' }));
                     }
                     return next;
                 });
