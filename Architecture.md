@@ -1,4 +1,4 @@
-﻿# Architecture.md
+# Architecture.md
 
 This document sets out the files for a Contract AI platform. There are three main branches: contract playbook generator, contract playbook editor, and review contract against playbook. [Superdoc](https://github.com/Harbour-Enterprises/SuperDoc), a ProseMirror based platform, is the docx editing and viewing engine used. The entire application runs in the browser (Client-Side) using TypeScript/JavaScript libraries.
 
@@ -61,15 +61,7 @@ It currently relies on the Google GenAI SDK (Gemini 2.0 Flash) for LLM calls. Th
 
 -   **components/superdoc/SuperdocEditor.tsx**: The main wrapper for the Superdoc editor. Handles document structure, track changes, and rendering. It also contains substantive logic to ensure accurate positional amendments given to it by diff-match-patch. It builds all insertions and deletions into a single ProseMirror transaction (Single Transaction Approach) so that Track Changes position mapping is handled correctly by the editor engine. ProseMirror automatically handles position mapping for chained operations within one transaction.
     
--   **components/superdoc/extensions/ClauseExtension.ts**: A custom extension that teaches the editor how to render specific "Clause" blocks with ID and Risk data. This file defines a *custom node extension* for the Superdoc (ProseMirror-based) editor. It teaches the text editor how to understand a "Clause" as a specific data object, not just plain text. Specifically, it allows the editor to: 
-	1. **Wrap Paragraphs**: Convert standard text into a `<div data-type="clause">` block. 
-	2. **Store Metadata**: Attach invisible data to the text, specifically:
-	    -   id: The UUID used to link the text to the AI findings.
-	    -   risk: (red/yellow/green) Used to render the colored border on the left.    
-	    -   status: Used to track if a clause is "original", "pending", or "modified".
-	3.  **Visual Styling**: It applies the .sd-clause-node CSS class, which gives the clauses their interactive hover states and left-border indicators in the UI.
-	    
-	Without this file, the editor would strip out all the AI analysis tags and the "Structure Document" feature would fail.
+    **Architecture Note:** The editor now uses Superdoc's native `sdBlockId` for block identification instead of custom clause nodes. Metadata (risk levels, status) is stored in React state (in `App.tsx`) rather than in document attributes, keeping the document clean. Visual styling (colored borders, hover states) is applied via CSS classes that are dynamically added to DOM elements based on the React state, using `sdBlockId` to target specific blocks.
     
 -   **utils/diff.ts**: A wrapper around the Google diff-match-patch library to calculate word-level differences for Track Changes.
     
