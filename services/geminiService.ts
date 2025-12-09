@@ -4,6 +4,12 @@ import { Playbook, ShadowDocument, AnalysisFinding, RiskLevel, PlaybookRule } fr
 import { detectLikelyCategories, getTopMatchingRulesByEmbedding, cosineSimilarity } from './classifier';
 import { parseIR, mapIRToFindings } from './irParser';
 
+let geminiApiKey = '';
+
+export const setGeminiApiKey = (key: string) => {
+    geminiApiKey = (key || '').trim();
+};
+
 /**
  * DEFAULT canonical taxonomy for playbook categories.
  * These are common to most contracts. LLM can ADD new categories if needed.
@@ -194,7 +200,10 @@ export const classifyClauseLocally = (
 };
 
 const getClient = () => {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    if (!geminiApiKey) {
+        throw new Error("Gemini API key is required. Please add it in Settings.");
+    }
+    return new GoogleGenAI({ apiKey: geminiApiKey });
 };
 
 /**

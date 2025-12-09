@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { ReviewSessionState, AnalysisFinding, AppMode, Playbook, RiskLevel } from './types';
 import { wordAdapter } from './services/wordAdapter';
-import { analyzeDocumentWithGemini, generatePlaybookFromDocument, detectPartiesFromDocument, parsePlaybookFromText, enrichPlaybookWithEmbeddings } from './services/geminiService';
+import { analyzeDocumentWithGemini, generatePlaybookFromDocument, detectPartiesFromDocument, parsePlaybookFromText, enrichPlaybookWithEmbeddings, setGeminiApiKey } from './services/geminiService';
 import RiskCard from './components/RiskCard';
 import DetailView from './components/DetailView';
 import FileUpload from './components/FileUpload';
@@ -35,7 +35,7 @@ export default function App() {
 
     // Settings State
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [appSettings, setAppSettings] = useState<AppSettings>({});
+    const [appSettings, setAppSettings] = useState<AppSettings>({ apiKey: '' });
 
     // New: Clause Metadata for styling (Decoupled from findings)
     const [clauseMetadata, setClauseMetadata] = useState<Map<string, { risk: RiskLevel; status: string }>>(new Map());
@@ -54,16 +54,37 @@ export default function App() {
         const saved = localStorage.getItem('contract_ai_settings');
         if (saved) {
             try {
-                setAppSettings(JSON.parse(saved));
+                const parsed = JSON.parse(saved);
+                setAppSettings(parsed);
+                setGeminiApiKey(parsed.apiKey || '');
+                if (!parsed.apiKey) {
+                    setIsSettingsOpen(true);
+                }
             } catch (e) {
                 console.error("Failed to load settings", e);
+                setIsSettingsOpen(true);
             }
+        } else {
+            setIsSettingsOpen(true);
         }
     }, []);
 
     const handleSaveSettings = (newSettings: AppSettings) => {
-        setAppSettings(newSettings);
-        localStorage.setItem('contract_ai_settings', JSON.stringify(newSettings));
+        const merged = { ...appSettings, ...newSettings };
+        setAppSettings(merged);
+        setGeminiApiKey(merged.apiKey || '');
+        localStorage.setItem('contract_ai_settings', JSON.stringify(merged));
+    };
+
+    const ensureApiKey = (): string | null => {
+        const key = appSettings.apiKey?.trim();
+        if (!key) {
+            alert("Please enter your Gemini API key in Settings to continue.");
+            setIsSettingsOpen(true);
+            return null;
+        }
+        setGeminiApiKey(key);
+        return key;
     };
 
     // 1. File Upload Handler
@@ -87,6 +108,8 @@ export default function App() {
 
     // Helper: Trigger party detection
     const runPartyDetection = async (file: File) => {
+        if (!ensureApiKey()) return;
+
         setSession(prev => ({
             status: 'detecting_parties',
             progressMessage: 'Scanning document for parties...',
@@ -165,6 +188,10 @@ export default function App() {
                 });
 
             } else if (file.name.toLowerCase().endsWith('.docx')) {
+                if (!ensureApiKey()) {
+                    setSession(prev => ({ ...prev, status: 'playbook_selection' }));
+                    return;
+                }
                 const tempDoc = await wordAdapter.loadFromFile(file);
                 const fullText = tempDoc.paragraphs.map(p => p.text).join('\n');
                 playbook = await parsePlaybookFromText(fullText, file.name, (msg) => {
@@ -206,6 +233,7 @@ export default function App() {
     const startPlaybookGeneration = async (party: string) => {
         const doc = session.document;
         if (!doc) return;
+        if (!ensureApiKey()) return;
 
         setSession(prev => ({
             ...prev,
@@ -233,6 +261,7 @@ export default function App() {
 
     // 5. Final Step: Start Analysis
     const startReview = async (playbook: Playbook) => {
+        if (!ensureApiKey()) return;
         setSession(prev => ({
             ...prev,
             status: 'scanning',
@@ -455,7 +484,11 @@ export default function App() {
         if (showTestRunner) {
             return (
                 <div className="flex-1 p-4 overflow-hidden">
-                    <TestSuiteRunner onRunExportIntegration={handleIntegrationExportTest} />
+                    <TestSuiteRunner 
+                        apiKey={appSettings.apiKey}
+                        onRequestApiKey={() => setIsSettingsOpen(true)}
+                        onRunExportIntegration={handleIntegrationExportTest} 
+                    />
                 </div>
             );
         }
@@ -666,6 +699,8 @@ export default function App() {
                     onRestart={handleRestart}
                     initialSettings={appSettings}
                     onSaveSettings={handleSaveSettings}
+                    apiKey={appSettings.apiKey}
+                    onRequestApiKey={() => setIsSettingsOpen(true)}
                 />
             );
         }
@@ -720,6 +755,10 @@ export default function App() {
                             
                             {/* Desktop Actions */}
                             <div className="hidden md:flex items-center gap-2">
+                                <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
+                                    <Settings className="w-4 h-4" /> API Key
+                                </button>
+                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
                                 <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
                                     <Download className="w-4 h-4" /> Save
                                 </button>
@@ -854,7 +893,11 @@ export default function App() {
                             <button onClick={() => setShowTestRunner(false)} className="text-gray-400 hover:text-white"><RotateCcw className="w-4 h-4" /></button>
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            <TestSuiteRunner onRunExportIntegration={handleIntegrationExportTest} />
+                            <TestSuiteRunner 
+                                apiKey={appSettings.apiKey}
+                                onRequestApiKey={() => setIsSettingsOpen(true)}
+                                onRunExportIntegration={handleIntegrationExportTest} 
+                            />
                         </div>
                     </div>
                 </div>

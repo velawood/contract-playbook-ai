@@ -12,6 +12,8 @@ interface PlaybookEditorProps {
     initialSettings: AppSettings;
     onSaveSettings: (s: AppSettings) => void;
     mode: 'edit' | 'generate';
+    apiKey?: string;
+    onRequestApiKey: () => void;
 }
 
 /**
@@ -19,7 +21,7 @@ interface PlaybookEditorProps {
  * Used by both "Generate Playbook" (after generation) and "Edit Playbook" (standalone) modes.
  */
 const PlaybookEditor: React.FC<PlaybookEditorProps> = ({
-    playbook, onUpdate, onRestart, initialSettings, onSaveSettings, mode
+    playbook, onUpdate, onRestart, initialSettings, onSaveSettings, mode, apiKey, onRequestApiKey
 }) => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -61,6 +63,8 @@ const PlaybookEditor: React.FC<PlaybookEditorProps> = ({
                 <PlaybookTable 
                     playbook={playbook} 
                     onUpdate={onUpdate} 
+                    apiKey={apiKey}
+                    onRequestApiKey={onRequestApiKey}
                 />
             </div>
             

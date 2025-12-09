@@ -9,9 +9,11 @@ declare var docx: any;
 
 interface TestSuiteRunnerProps {
     onRunExportIntegration?: () => Promise<boolean>;
+    apiKey?: string;
+    onRequestApiKey?: () => void;
 }
 
-const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegration }) => {
+const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegration, apiKey, onRequestApiKey }) => {
     const [isRunning, setIsRunning] = useState(false);
     const [isLiveRunning, setIsLiveRunning] = useState(false);
     const [results, setResults] = useState<TestResult[]>([]);
@@ -37,8 +39,18 @@ const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegratio
         setIsRunning(false);
     };
 
+    const requireApiKey = () => {
+        if (!apiKey?.trim()) {
+            alert("Add your Gemini API key in Settings to run live LLM tests.");
+            onRequestApiKey?.();
+            return false;
+        }
+        return true;
+    };
+
     const runLiveTests = async () => {
         if (isRunning) return;
+        if (!requireApiKey()) return;
         setIsLiveRunning(true);
         setResults([]);
         setDebugLogs([]);
@@ -57,6 +69,7 @@ const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegratio
 
     const runF2Test = async () => {
         if (isRunning) return;
+        if (!requireApiKey()) return;
         setIsLiveRunning(true);
         setResults([]);
         setDebugLogs([]);
@@ -173,8 +186,8 @@ const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegratio
                         </button>
                         <button 
                             onClick={runLiveTests}
-                            disabled={isRunning || isLiveRunning}
-                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
+                            disabled={isRunning || isLiveRunning || !apiKey}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
                         >
                             {isLiveRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />} 
                             Live LLM (Full)
@@ -183,8 +196,8 @@ const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegratio
                     <div className="flex gap-2">
                          <button 
                             onClick={runF2Test}
-                            disabled={isRunning || isLiveRunning}
-                            className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
+                            disabled={isRunning || isLiveRunning || !apiKey}
+                            className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-2 rounded font-medium flex items-center justify-center gap-2 transition-colors text-xs"
                         >
                             {isLiveRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bug className="w-3 h-3" />} 
                             F2 Stress Test
@@ -198,6 +211,11 @@ const TestSuiteRunner: React.FC<TestSuiteRunnerProps> = ({ onRunExportIntegratio
                             Test Export
                         </button>
                     </div>
+                    {!apiKey && (
+                        <div className="text-[11px] text-yellow-100 bg-yellow-900/40 border border-yellow-800 px-3 py-2 rounded">
+                            Add your Gemini API key in Settings to run live LLM checks.
+                        </div>
+                    )}
                 </div>
             </div>
 

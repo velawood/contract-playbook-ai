@@ -49,14 +49,8 @@ A client-side, AI-powered contract review application built with React, TypeScri
     npm install
     ```
 
-3.  **Configure Environment:**
-    The application relies on `process.env.API_KEY` to authenticate with Gemini.
-    
-    Create a `.env` file in the root directory:
-    ```env
-    API_KEY=your_gemini_api_key_here
-    ```
-    *(Note: In a production client-side app, you should proxy requests through a backend to secure your API key. For this demo architecture, the key is used directly in the browser).*
+3.  **Provide your API key in-app:**
+    When the app loads, you’ll be prompted to paste your Gemini API key in **Settings**. The key stays in your browser’s local storage—no `.env` needed.
 
 4.  **Run the application:**
     ```bash
