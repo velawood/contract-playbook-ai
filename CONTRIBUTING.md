@@ -26,6 +26,10 @@ These are high-impact additions that improve the workflow for legal professional
 **Goal:** Allow interactive dialogue with the document.
 *   **Task:** Build a UI (sidebar or modal) where users can ask ad-hoc questions ("Does this contract have a non-solicit?") or instruct the AI to refine a specific finding interactively.
 
+### **4. Undo button**
+**Goal:** Allow AI applied edits to be undone.
+*  **Task:** Put an Undo button in the side panel allowimg users to undo AI-applied edits. Investigate cleanest way to do it using Superdoc functionality or more long term to build a Viewer module using MVP approach.
+
 ---
 
 ## 🛠️ Technical / Engineering Challenges
