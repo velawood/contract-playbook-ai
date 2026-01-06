@@ -7,8 +7,6 @@ import { refinePlaybookRule, refinePlaybookGlobal } from '../services/geminiServ
 interface PlaybookTableProps {
     playbook: Playbook;
     onUpdate: (updatedPlaybook: Playbook) => void;
-    apiKey?: string;
-    onRequestApiKey: () => void;
 }
 
 // Access the global docx library loaded via script tag
@@ -19,7 +17,7 @@ interface ModifiedState {
     viewMode: Record<string, 'amended' | 'original'>; // rule_id -> current view
 }
 
-const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKey, onRequestApiKey }) => {
+const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate }) => {
     // UI State for AI Modal
     const [aiTarget, setAiTarget] = useState<'global' | string | null>(null); // 'global' or rule_id
     const [aiPrompt, setAiPrompt] = useState('');
@@ -61,11 +59,6 @@ const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKe
 
     const handleAiSubmit = async () => {
         if (!aiPrompt.trim()) return;
-        if (!apiKey?.trim()) {
-            alert("Add your Gemini API key in Settings to use AI refinement.");
-            onRequestApiKey();
-            return;
-        }
         setIsAiLoading(true);
         try {
             if (aiTarget === 'global') {
@@ -322,8 +315,7 @@ const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKe
                 <div className="flex gap-2">
                     <button 
                         onClick={() => handleOpenAiModal('global')}
-                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 rounded text-white text-sm font-medium transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={!apiKey}
+                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 rounded text-white text-sm font-medium transition-all shadow-md"
                     >
                         <Sparkles className="w-4 h-4" /> AI Refine All
                     </button>
@@ -336,13 +328,6 @@ const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKe
                     </button>
                 </div>
             </div>
-
-            {!apiKey && (
-                <div className="px-4 py-3 bg-red-50 border-b border-red-100 text-xs text-red-700 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4" />
-                    Add your Gemini API key in Settings to enable AI-powered refinements.
-                </div>
-            )}
 
             {/* Editable Table */}
             <div className="overflow-auto flex-1 p-4 pb-20">
@@ -392,7 +377,7 @@ const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKe
                                             value={rule.subcategory || ''}
                                             onChange={(e) => !isDisabled && handleRuleChange(idx, 'subcategory', e.target.value)}
                                             className="w-full text-gray-500 bg-transparent border-none focus:ring-1 focus:ring-blue-500 rounded px-1 placeholder-gray-300 disabled:opacity-50 text-xs"
-                                            placeholder=""
+                                            placeholder="SUB"
                                             disabled={isDisabled}
                                         />
                                     </td>
@@ -466,9 +451,9 @@ const PlaybookTable: React.FC<PlaybookTableProps> = ({ playbook, onUpdate, apiKe
                                         <div className="flex flex-col gap-2 items-center">
                                             <button 
                                                 onClick={() => handleOpenAiModal(rule.rule_id || '')}
-                                            className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors"
                                                 title="AI Refine this Rule"
-                                            disabled={isDisabled || !apiKey}
+                                                disabled={isDisabled}
                                             >
                                                 <Wand2 className="w-5 h-5" />
                                             </button>
