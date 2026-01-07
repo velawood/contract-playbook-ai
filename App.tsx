@@ -1,5 +1,6 @@
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { SignedIn, SignedOut, SignInButton, UserButton, useUser, useAuth } from '@clerk/clerk-react';
 import { ReviewSessionState, AnalysisFinding, AppMode, Playbook, RiskLevel } from './types';
 import { wordAdapter } from './services/wordAdapter';
 import { analyzeDocumentWithGemini, generatePlaybookFromDocument, detectPartiesFromDocument, parsePlaybookFromText, enrichPlaybookWithEmbeddings, setGeminiApiKey } from './services/geminiService';
@@ -9,10 +10,8 @@ import FileUpload from './components/FileUpload';
 import PlaybookEditor from './components/PlaybookEditor';
 import SuperdocEditor, { SuperdocEditorHandle } from './components/superdoc/SuperdocEditor';
 import TestSuiteRunner from './components/TestSuiteRunner';
-import SettingsModal, { AppSettings } from './components/SettingsModal';
-import { FileText, RotateCcw, CheckCircle2, ChevronRight, BookOpen, Loader2, Plus, Upload, Settings, Download, Bug, Layout, ScanEye, Wand2, Edit3, TestTube, Menu, X, LogOut, User as UserIcon } from 'lucide-react';
-import { api, User } from './services/api';
-import { AuthModal } from './components/AuthModal';
+import { FileText, RotateCcw, CheckCircle2, ChevronRight, BookOpen, Loader2, Plus, Upload, Download, Bug, Layout, ScanEye, Wand2, Edit3, TestTube, Menu, X } from 'lucide-react';
+import { api } from './services/api';
 
 export default function App() {
     const [session, setSession] = useState<ReviewSessionState>({
@@ -36,14 +35,9 @@ export default function App() {
     const [isEditorReady, setIsEditorReady] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-    // Settings State
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [appSettings, setAppSettings] = useState<AppSettings>({ apiKey: '' });
-
-    // Auth State
-    const [user, setUser] = useState<User | null>(null);
-    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-    const [isBackendKey, setIsBackendKey] = useState(false);
+    // Clerk Auth
+    const { isSignedIn, user: clerkUser } = useUser();
+    const { getToken } = useAuth();
 
     // New: Clause Metadata for styling (Decoupled from findings)
     const [clauseMetadata, setClauseMetadata] = useState<Map<string, { risk: RiskLevel; status: string }>>(new Map());
@@ -57,97 +51,33 @@ export default function App() {
         email: 'reviewer@example.com'
     }), [session.userParty]);
 
-    // Load Settings & Auth on Mount
+    // Sync Clerk token with API client and fetch backend API key
     useEffect(() => {
-        const init = async () => {
-            // 1. Load Local Settings
-            const saved = localStorage.getItem('contract_ai_settings');
-            let initialSettings = { apiKey: '' };
-            if (saved) {
+        const syncToken = async () => {
+            if (isSignedIn) {
                 try {
-                    initialSettings = JSON.parse(saved);
-                    setAppSettings(initialSettings);
-                    setGeminiApiKey(initialSettings.apiKey || '');
-                } catch (e) { console.error(e); }
-            }
+                    const token = await getToken();
+                    api.setToken(token);
 
-            // 2. Check Auth
-            if (api.isAuthenticated()) {
-                try {
-                    const currentUser = await api.getMe();
-                    setUser(currentUser);
-
-                    // 3. Try to get Backend Key
+                    // Get user info including API key from /users/me
                     try {
-                        const { apiKey } = await api.getGeminiKey();
-                        if (apiKey) {
-                            setGeminiApiKey(apiKey);
-                            setIsBackendKey(true);
+                        const user = await api.getMe();
+                        if (user.gemini_api_key) {
+                            setGeminiApiKey(user.gemini_api_key);
                             console.log("Using backend-provided API key");
-                            // We don't overwrite local settings, just memory/service
                         }
-                    } catch (keyErr) {
-                        console.warn("Backend key check failed", keyErr);
+                    } catch (userErr) {
+                        console.warn("Failed to fetch user info", userErr);
                     }
-                } catch (authErr) {
-                    api.logout(); // Token invalid
+                } catch (err) {
+                    console.error("Failed to get Clerk token", err);
                 }
             } else {
-                if (!initialSettings.apiKey) {
-                    setIsSettingsOpen(true);
-                }
+                api.setToken(null);
             }
         };
-        init();
-    }, []);
-
-    const handleLoginSuccess = async () => {
-        try {
-            const currentUser = await api.getMe();
-            setUser(currentUser);
-
-            // Try to get Backend Key
-            try {
-                const { apiKey } = await api.getGeminiKey();
-                if (apiKey) {
-                    setGeminiApiKey(apiKey);
-                    setIsBackendKey(true);
-                    // Close settings if it was open for key prompt
-                    setIsSettingsOpen(false);
-                }
-            } catch (err) {
-                console.warn("No backend key available", err);
-            }
-        } catch (e) {
-            console.error("Login post-check failed", e);
-        }
-    };
-
-    const handleLogout = () => {
-        api.logout();
-        setUser(null);
-        setIsBackendKey(false);
-        // Revert to local key if exists
-        setGeminiApiKey(appSettings.apiKey || '');
-    };
-
-    const handleSaveSettings = (newSettings: AppSettings) => {
-        const merged = { ...appSettings, ...newSettings };
-        setAppSettings(merged);
-        setGeminiApiKey(merged.apiKey || '');
-        localStorage.setItem('contract_ai_settings', JSON.stringify(merged));
-    };
-
-    const ensureApiKey = (): string | null => {
-        const key = appSettings.apiKey?.trim();
-        if (!key) {
-            alert("Please enter your Gemini API key in Settings to continue.");
-            setIsSettingsOpen(true);
-            return null;
-        }
-        setGeminiApiKey(key);
-        return key;
-    };
+        syncToken();
+    }, [isSignedIn, getToken]);
 
     // 1. File Upload Handler
     const handleFileSelected = (file: File) => {
@@ -170,7 +100,6 @@ export default function App() {
 
     // Helper: Trigger party detection
     const runPartyDetection = async (file: File) => {
-        if (!ensureApiKey()) return;
 
         setSession(prev => ({
             status: 'detecting_parties',
@@ -250,10 +179,6 @@ export default function App() {
                 });
 
             } else if (file.name.toLowerCase().endsWith('.docx')) {
-                if (!ensureApiKey()) {
-                    setSession(prev => ({ ...prev, status: 'playbook_selection' }));
-                    return;
-                }
                 const tempDoc = await wordAdapter.loadFromFile(file);
                 const fullText = tempDoc.paragraphs.map(p => p.text).join('\n');
                 playbook = await parsePlaybookFromText(fullText, file.name, (msg) => {
@@ -295,7 +220,6 @@ export default function App() {
     const startPlaybookGeneration = async (party: string) => {
         const doc = session.document;
         if (!doc) return;
-        if (!ensureApiKey()) return;
 
         setSession(prev => ({
             ...prev,
@@ -323,7 +247,6 @@ export default function App() {
 
     // 5. Final Step: Start Analysis
     const startReview = async (playbook: Playbook) => {
-        if (!ensureApiKey()) return;
         setSession(prev => ({
             ...prev,
             status: 'scanning',
@@ -547,8 +470,6 @@ export default function App() {
             return (
                 <div className="flex-1 p-4 overflow-hidden">
                     <TestSuiteRunner
-                        apiKey={appSettings.apiKey}
-                        onRequestApiKey={() => setIsSettingsOpen(true)}
                         onRunExportIntegration={handleIntegrationExportTest}
                     />
                 </div>
@@ -575,104 +496,126 @@ export default function App() {
 
         if (session.status === 'idle' || session.status === 'mode_selection') {
             return (
-                <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 bg-gray-50 min-h-full w-full">
-                    <div className="text-center mb-10 mt-10 md:mt-0">
-                        <div className="flex items-center justify-center gap-3 mb-4">
-                            <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg">
-                                <FileText className="w-7 h-7 text-white" />
-                            </div>
-                            <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Contract AI</h1>
+                <div className="flex-1 flex flex-col bg-gray-50 min-h-full w-full">
+                    {/* Landing Page Header with Auth */}
+                    <header className="flex justify-between items-center p-4 bg-white border-b border-gray-200">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-sm">AI</div>
+                            <span className="font-bold text-gray-700">Contract AI</span>
                         </div>
-                        <p className="text-lg text-gray-600 max-w-lg mx-auto">
-                            Advanced contract review and playbook generation powered by Generative AI.
-                        </p>
-                    </div>
-
-                    {session.status === 'idle' ? (
-                        <div className="w-full max-w-xl">
-                            <FileUpload onFileSelected={handleFileSelected} />
-                            <div className="mt-8 flex justify-center gap-4">
-                                <button
-                                    onClick={handleDebugEditor}
-                                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
-                                >
-                                    <Layout className="w-3 h-3" /> Editor Debug
-                                </button>
-                                <button
-                                    onClick={() => setShowTestRunner(true)}
-                                    className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
-                                >
-                                    <TestTube className="w-3 h-3" /> System Tests
-                                </button>
-                            </div>
+                        <div className="flex items-center gap-3">
+                            <SignedOut>
+                                <SignInButton mode="modal">
+                                    <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+                                        Sign In
+                                    </button>
+                                </SignInButton>
+                            </SignedOut>
+                            <SignedIn>
+                                <UserButton afterSignOutUrl="/" />
+                            </SignedIn>
                         </div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl animate-in slide-in-from-bottom-4 duration-500 pb-10">
-                            {/* Option 1: Generate Playbook */}
-                            <div
-                                onClick={() => selectMode('generate_playbook')}
-                                className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-blue-300 transition-all cursor-pointer group relative overflow-hidden"
-                            >
-                                <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                                    <Wand2 className="w-24 h-24 text-blue-600" />
+                    </header>
+
+                    <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8">
+                        <div className="text-center mb-10 mt-10 md:mt-0">
+                            <div className="flex items-center justify-center gap-3 mb-4">
+                                <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg">
+                                    <FileText className="w-7 h-7 text-white" />
                                 </div>
-                                <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                                    <ScanEye className="w-6 h-6 text-blue-600" />
-                                </div>
-                                <h3 className="text-xl font-bold text-gray-900 mb-2">Generate Playbook</h3>
-                                <p className="text-gray-500 text-sm leading-relaxed">
-                                    AI analyzes your document to extract negotiation rules, risk positions, and clauses automatically.
-                                </p>
-                                <div className="mt-6 flex items-center text-blue-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
-                                    Generate New <ChevronRight className="w-4 h-4 ml-1" />
+                                <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Contract AI</h1>
+                            </div>
+                            <p className="text-lg text-gray-600 max-w-lg mx-auto">
+                                Advanced contract review and playbook generation powered by Generative AI.
+                            </p>
+                        </div>
+
+                        {session.status === 'idle' ? (
+                            <div className="w-full max-w-xl">
+                                <FileUpload onFileSelected={handleFileSelected} />
+                                <div className="mt-8 flex justify-center gap-4">
+                                    <button
+                                        onClick={handleDebugEditor}
+                                        className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                                    >
+                                        <Layout className="w-3 h-3" /> Editor Debug
+                                    </button>
+                                    <button
+                                        onClick={() => setShowTestRunner(true)}
+                                        className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                                    >
+                                        <TestTube className="w-3 h-3" /> System Tests
+                                    </button>
                                 </div>
                             </div>
-
-                            {/* Option 2: Edit Existing Playbook */}
-                            <div
-                                onClick={() => selectMode('edit_playbook')}
-                                className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-purple-300 transition-all cursor-pointer group relative overflow-hidden"
-                            >
-                                <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                                    <Edit3 className="w-24 h-24 text-purple-600" />
-                                </div>
-                                <div className="w-12 h-12 bg-purple-50 rounded-lg flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                                    <BookOpen className="w-6 h-6 text-purple-600" />
-                                </div>
-                                <h3 className="text-xl font-bold text-gray-900 mb-2">Edit Playbook</h3>
-                                <p className="text-gray-500 text-sm leading-relaxed">
-                                    Refine, customize, or manually create a negotiation playbook from a uploaded file.
-                                </p>
-                                <div className="mt-6 flex items-center text-purple-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
-                                    Open Editor <ChevronRight className="w-4 h-4 ml-1" />
-                                </div>
-                            </div>
-
-                            {/* Option 3: Standard Review */}
-                            <div
-                                onClick={() => selectMode('review')}
-                                className="col-span-1 md:col-span-2 bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-green-300 transition-all cursor-pointer group relative overflow-hidden"
-                            >
-                                <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                                    <CheckCircle2 className="w-32 h-32 text-green-600" />
-                                </div>
-                                <div className="flex items-start gap-6">
-                                    <div className="w-12 h-12 bg-green-50 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                                        <CheckCircle2 className="w-6 h-6 text-green-600" />
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl animate-in slide-in-from-bottom-4 duration-500 pb-10">
+                                {/* Option 1: Generate Playbook */}
+                                <div
+                                    onClick={() => selectMode('generate_playbook')}
+                                    className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-blue-300 transition-all cursor-pointer group relative overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                        <Wand2 className="w-24 h-24 text-blue-600" />
                                     </div>
-                                    <div>
-                                        <h3 className="text-xl font-bold text-gray-900 mb-2">Start Contract Review</h3>
-                                        <p className="text-gray-500 text-sm leading-relaxed max-w-lg">
-                                            Analyze a contract against an existing playbook. The AI will flag risks, redline clauses, and suggest improvements based on your rules.
-                                        </p>
-                                        <div className="mt-6 inline-flex items-center text-green-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
-                                            Select Playbook & Review <ChevronRight className="w-4 h-4 ml-1" />
+                                    <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                                        <ScanEye className="w-6 h-6 text-blue-600" />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-gray-900 mb-2">Generate Playbook</h3>
+                                    <p className="text-gray-500 text-sm leading-relaxed">
+                                        AI analyzes your document to extract negotiation rules, risk positions, and clauses automatically.
+                                    </p>
+                                    <div className="mt-6 flex items-center text-blue-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
+                                        Generate New <ChevronRight className="w-4 h-4 ml-1" />
+                                    </div>
+                                </div>
+
+                                {/* Option 2: Edit Existing Playbook */}
+                                <div
+                                    onClick={() => selectMode('edit_playbook')}
+                                    className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-purple-300 transition-all cursor-pointer group relative overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                        <Edit3 className="w-24 h-24 text-purple-600" />
+                                    </div>
+                                    <div className="w-12 h-12 bg-purple-50 rounded-lg flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                                        <BookOpen className="w-6 h-6 text-purple-600" />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-gray-900 mb-2">Edit Playbook</h3>
+                                    <p className="text-gray-500 text-sm leading-relaxed">
+                                        Refine, customize, or manually create a negotiation playbook from a uploaded file.
+                                    </p>
+                                    <div className="mt-6 flex items-center text-purple-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
+                                        Open Editor <ChevronRight className="w-4 h-4 ml-1" />
+                                    </div>
+                                </div>
+
+                                {/* Option 3: Standard Review */}
+                                <div
+                                    onClick={() => selectMode('review')}
+                                    className="col-span-1 md:col-span-2 bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:shadow-xl hover:border-green-300 transition-all cursor-pointer group relative overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                        <CheckCircle2 className="w-32 h-32 text-green-600" />
+                                    </div>
+                                    <div className="flex items-start gap-6">
+                                        <div className="w-12 h-12 bg-green-50 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                                            <CheckCircle2 className="w-6 h-6 text-green-600" />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-xl font-bold text-gray-900 mb-2">Start Contract Review</h3>
+                                            <p className="text-gray-500 text-sm leading-relaxed max-w-lg">
+                                                Analyze a contract against an existing playbook. The AI will flag risks, redline clauses, and suggest improvements based on your rules.
+                                            </p>
+                                            <div className="mt-6 inline-flex items-center text-green-600 font-medium text-sm group-hover:translate-x-1 transition-transform">
+                                                Select Playbook & Review <ChevronRight className="w-4 h-4 ml-1" />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
             );
         }
@@ -759,10 +702,6 @@ export default function App() {
                     mode={session.mode === 'generate_playbook' ? 'generate' : 'edit'}
                     onUpdate={(pb) => setSession(prev => ({ ...prev, generatedPlaybook: pb }))}
                     onRestart={handleRestart}
-                    initialSettings={appSettings}
-                    onSaveSettings={handleSaveSettings}
-                    apiKey={appSettings.apiKey}
-                    onRequestApiKey={() => setIsSettingsOpen(true)}
                 />
             );
         }
@@ -773,232 +712,251 @@ export default function App() {
     return (
         <div className="min-h-screen bg-white text-slate-900 font-sans selection:bg-blue-100 relative overflow-hidden flex flex-col">
 
-            {/* LAYER 1: Full-Screen Editor (Always Mounted if file present) */}
-            <div className={`absolute inset-0 z-0 flex flex-col ${shouldRenderEditor() ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                {session.status === 'editor_debug' && (
-                    <div className="p-2 bg-gray-800 text-white text-xs flex gap-2 items-center shrink-0 z-20 relative">
-                        <span>DEBUG MODE</span>
-                        <label className="flex items-center gap-1 bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded cursor-pointer">
-                            <span className="truncate max-w-[100px]">{session.uploadedFile?.name || "Load File"}</span>
-                            <input type="file" className="hidden" onChange={(e) => e.target.files?.[0] && handleFileSelected(e.target.files[0])} />
-                        </label>
-                        <button onClick={handleStructureDoc} className="px-2 py-1 bg-blue-600 rounded">Structure Doc</button>
-                        <button onClick={handleInspectClauses} className="px-2 py-1 bg-green-600 rounded">Log Clauses</button>
-                        <button onClick={handleRunAssemblyTests} className="px-2 py-1 bg-purple-600 rounded">Run Assembly Tests</button>
-                        <button onClick={handleRestart} className="ml-auto px-2 py-1 bg-red-600 rounded">Exit</button>
-                    </div>
-                )}
-
-                {session.status !== 'editor_debug' && (
-                    <header className="bg-white border-b border-gray-200 p-3 flex justify-between items-center shadow-sm z-20 shrink-0 h-14 relative">
-                        <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-sm">AI</div>
-                            <h1 className="font-bold text-gray-700 text-lg hidden md:block">Contract Review</h1>
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded border border-gray-200 truncate max-w-[200px]">
-                                {session.uploadedFile?.name || 'Document'}
-                            </span>
-                        </div>
-
-                        {/* Right side container for mobile/desktop actions */}
+            {/* Unauthenticated Landing Page */}
+            <SignedOut>
+                <div className="flex-1 flex flex-col bg-gradient-to-br from-gray-50 to-blue-50 min-h-screen">
+                    <header className="flex justify-between items-center p-4 bg-white/80 backdrop-blur border-b border-gray-200">
                         <div className="flex items-center gap-2">
-                            {/* Mobile Save Button */}
-                            <button
-                                onClick={handleSaveAs}
-                                className="md:hidden p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                                title="Save Document"
-                            >
-                                <Download className="w-5 h-5" />
-                            </button>
-
-                            {/* Mobile Menu Toggle */}
-                            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
-                                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-                            </button>
-
-                            {/* Desktop Actions */}
-                            <div className="hidden md:flex items-center gap-2">
-                                {user ? (
-                                    <div className="flex items-center gap-2 mr-2">
-                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold border border-blue-200">
-                                            {user.full_name?.charAt(0) || user.email.charAt(0)}
-                                        </div>
-                                        <button onClick={handleLogout} className="text-gray-500 hover:text-red-600 text-xs font-medium">Log out</button>
-                                    </div>
-                                ) : (
-                                    <button
-                                        onClick={() => setIsAuthModalOpen(true)}
-                                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium mr-2 transition-colors flex items-center gap-1"
-                                    >
-                                        <UserIcon className="w-4 h-4" /> Log In
-                                    </button>
-                                )}
-
-                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
-
-                                <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                    <Settings className={`w-4 h-4 ${isBackendKey ? 'text-green-500' : ''}`} />
-                                    {isBackendKey ? 'API Key (Managed)' : 'API Key'}
-                                </button>
-                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
-                                <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                    <Download className="w-4 h-4" /> Save
-                                </button>
-                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
-                                <button onClick={handleRestart} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                    <RotateCcw className="w-4 h-4" /> Reset
-                                </button>
-                            </div>
+                            <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-sm">AI</div>
+                            <span className="font-bold text-gray-700">Contract AI</span>
                         </div>
-
-                        {/* Mobile Dropdown Menu */}
-                        {mobileMenuOpen && (
-                            <div className="absolute top-14 left-0 w-full bg-white shadow-lg border-b border-gray-200 p-4 flex flex-col gap-4 md:hidden z-50 animate-in slide-in-from-top-2">
-                                {user ? (
-                                    <button onClick={handleLogout} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-medium border border-gray-200">
-                                        <LogOut className="w-5 h-5" /> Log Out ({user.email})
-                                    </button>
-                                ) : (
-                                    <button onClick={() => { setIsAuthModalOpen(true); setMobileMenuOpen(false); }} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-medium border border-gray-200">
-                                        <UserIcon className="w-5 h-5" /> Log In
-                                    </button>
-                                )}
-                                <button onClick={handleRestart} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-bold border border-gray-200">
-                                    <RotateCcw className="w-5 h-5 text-red-500" /> Reset Session
-                                </button>
-                            </div>
-                        )}
+                        <SignInButton mode="modal">
+                            <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm">
+                                Sign In
+                            </button>
+                        </SignInButton>
                     </header>
-                )}
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                        <div className="max-w-2xl mx-auto">
+                            <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-xl">
+                                <FileText className="w-10 h-10 text-white" />
+                            </div>
+                            <h1 className="text-4xl md:text-5xl font-extrabold text-gray-900 tracking-tight mb-4">
+                                Contract AI
+                            </h1>
+                            <p className="text-xl text-gray-600 mb-8 max-w-lg mx-auto leading-relaxed">
+                                Advanced contract review and playbook generation powered by Generative AI.
+                            </p>
+                            <SignInButton mode="modal">
+                                <button className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-lg font-semibold transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
+                                    Sign In to Get Started
+                                </button>
+                            </SignInButton>
+                            <p className="mt-6 text-sm text-gray-500">
+                                Sign in to upload contracts, generate playbooks, and analyze documents.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </SignedOut>
 
-                <AuthModal
-                    isOpen={isAuthModalOpen}
-                    onClose={() => setIsAuthModalOpen(false)}
-                    onLoginSuccess={handleLoginSuccess}
-                />
+            {/* Authenticated App Content */}
+            <SignedIn>
+                {/* LAYER 1: Full-Screen Editor (Always Mounted if file present) */}
+                <div className={`absolute inset-0 z-0 flex flex-col ${shouldRenderEditor() ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                    {session.status === 'editor_debug' && (
+                        <div className="p-2 bg-gray-800 text-white text-xs flex gap-2 items-center shrink-0 z-20 relative">
+                            <span>DEBUG MODE</span>
+                            <label className="flex items-center gap-1 bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded cursor-pointer">
+                                <span className="truncate max-w-[100px]">{session.uploadedFile?.name || "Load File"}</span>
+                                <input type="file" className="hidden" onChange={(e) => e.target.files?.[0] && handleFileSelected(e.target.files[0])} />
+                            </label>
+                            <button onClick={handleStructureDoc} className="px-2 py-1 bg-blue-600 rounded">Structure Doc</button>
+                            <button onClick={handleInspectClauses} className="px-2 py-1 bg-green-600 rounded">Log Clauses</button>
+                            <button onClick={handleRunAssemblyTests} className="px-2 py-1 bg-purple-600 rounded">Run Assembly Tests</button>
+                            <button onClick={handleRestart} className="ml-auto px-2 py-1 bg-red-600 rounded">Exit</button>
+                        </div>
+                    )}
 
-                <div className="flex-1 flex overflow-hidden relative">
-                    {/* Left Sidebar (Findings) - Mobile Responsive */}
                     {session.status !== 'editor_debug' && (
-                        <div className={`
+                        <header className="bg-white border-b border-gray-200 p-3 flex justify-between items-center shadow-sm z-20 shrink-0 h-14 relative">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-sm">AI</div>
+                                <h1 className="font-bold text-gray-700 text-lg hidden md:block">Contract Review</h1>
+                                <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded border border-gray-200 truncate max-w-[200px]">
+                                    {session.uploadedFile?.name || 'Document'}
+                                </span>
+                            </div>
+
+                            {/* Right side container for mobile/desktop actions */}
+                            <div className="flex items-center gap-2">
+                                {/* Mobile Save Button */}
+                                <button
+                                    onClick={handleSaveAs}
+                                    className="md:hidden p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                                    title="Save Document"
+                                >
+                                    <Download className="w-5 h-5" />
+                                </button>
+
+                                {/* Mobile Menu Toggle */}
+                                <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
+                                    {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+                                </button>
+
+                                {/* Desktop Actions */}
+                                <div className="hidden md:flex items-center gap-2">
+                                    <SignedOut>
+                                        <SignInButton mode="modal">
+                                            <button className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium mr-2 transition-colors">
+                                                Sign In
+                                            </button>
+                                        </SignInButton>
+                                    </SignedOut>
+                                    <SignedIn>
+                                        <UserButton afterSignOutUrl="/" />
+                                    </SignedIn>
+
+                                    <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                                    <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
+                                        <Download className="w-4 h-4" /> Save
+                                    </button>
+                                    <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                                    <button onClick={handleRestart} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
+                                        <RotateCcw className="w-4 h-4" /> Reset
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Mobile Dropdown Menu */}
+                            {mobileMenuOpen && (
+                                <div className="absolute top-14 left-0 w-full bg-white shadow-lg border-b border-gray-200 p-4 flex flex-col gap-4 md:hidden z-50 animate-in slide-in-from-top-2">
+                                    <SignedOut>
+                                        <SignInButton mode="modal">
+                                            <button onClick={() => setMobileMenuOpen(false)} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-medium border border-gray-200">
+                                                Sign In
+                                            </button>
+                                        </SignInButton>
+                                    </SignedOut>
+                                    <SignedIn>
+                                        <div className="p-3 flex items-center gap-2 border border-gray-200 rounded">
+                                            <UserButton afterSignOutUrl="/" />
+                                            <span className="text-sm text-gray-600">{clerkUser?.primaryEmailAddress?.emailAddress}</span>
+                                        </div>
+                                    </SignedIn>
+                                    <button onClick={handleRestart} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-bold border border-gray-200">
+                                        <RotateCcw className="w-5 h-5 text-red-500" /> Reset Session
+                                    </button>
+                                </div>
+                            )}
+                        </header>
+                    )}
+
+
+                    <div className="flex-1 flex overflow-hidden relative">
+                        {/* Left Sidebar (Findings) - Mobile Responsive */}
+                        {session.status !== 'editor_debug' && (
+                            <div className={`
                         w-80 border-r border-gray-200 bg-gray-50 flex flex-col shrink-0 z-30 shadow-inner
                         fixed inset-y-0 left-0 transform transition-transform duration-300 md:relative md:translate-x-0
                         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
                     `}>
-                            <div className="p-3 border-b border-gray-200 bg-white sticky top-0 z-10 flex justify-between items-center">
-                                <div>
-                                    <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Risk Analysis</h2>
-                                    <div className="flex items-baseline gap-2">
-                                        <span className="text-xl font-extrabold text-gray-800">{session.findings.length} Issues</span>
-                                        <span className="text-xs font-medium text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
-                                            {session.findings.filter(f => f.risk_level === 'red').length} Critical
-                                        </span>
+                                <div className="p-3 border-b border-gray-200 bg-white sticky top-0 z-10 flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Risk Analysis</h2>
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="text-xl font-extrabold text-gray-800">{session.findings.length} Issues</span>
+                                            <span className="text-xs font-medium text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
+                                                {session.findings.filter(f => f.risk_level === 'red').length} Critical
+                                            </span>
+                                        </div>
                                     </div>
+                                    {/* Mobile Close */}
+                                    <button onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-gray-400 hover:text-gray-600">
+                                        <X className="w-5 h-5" />
+                                    </button>
                                 </div>
-                                {/* Mobile Close */}
-                                <button onClick={() => setMobileMenuOpen(false)} className="md:hidden p-1 text-gray-400 hover:text-gray-600">
-                                    <X className="w-5 h-5" />
-                                </button>
+                                <div className="overflow-y-auto p-3 flex-1 h-full min-h-0 space-y-3">
+                                    {session.findings.map(finding => (
+                                        <RiskCard
+                                            key={finding.target_id}
+                                            finding={finding}
+                                            isSelected={session.activeFindingId === finding.target_id}
+                                            onClick={() => handleCardClick(finding)}
+                                        />
+                                    ))}
+                                    {session.findings.length === 0 && (
+                                        <div className="text-center p-4 text-gray-400 text-sm">
+                                            No issues found or document compliant.
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            <div className="overflow-y-auto p-3 flex-1 h-full min-h-0 space-y-3">
-                                {session.findings.map(finding => (
-                                    <RiskCard
-                                        key={finding.target_id}
-                                        finding={finding}
-                                        isSelected={session.activeFindingId === finding.target_id}
-                                        onClick={() => handleCardClick(finding)}
-                                    />
-                                ))}
-                                {session.findings.length === 0 && (
-                                    <div className="text-center p-4 text-gray-400 text-sm">
-                                        No issues found or document compliant.
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Editor Container */}
-                    <div className="flex-1 relative bg-gray-100 overflow-hidden flex flex-col">
-                        <SuperdocEditor
-                            ref={editorRef}
-                            file={session.uploadedFile}
-                            activeFindingId={session.activeFindingId}
-                            clauseMetadata={clauseMetadata}
-                            user={editorUser}
-                            onEditorReady={() => setIsEditorReady(true)}
-                            onClearSelection={() => setSession(prev => ({ ...prev, activeFindingId: null }))}
-                        />
-                    </div>
-
-                    {/* Right Sidebar (Detail) - Mobile Overlay */}
-                    {session.status !== 'editor_debug' && session.activeFindingId && (
-                        <div className="w-full md:w-[400px] shrink-0 border-l border-gray-200 shadow-xl z-40 bg-white absolute md:relative inset-y-0 right-0 flex flex-col animate-in slide-in-from-right duration-200">
-                            <div className="md:hidden p-2 bg-gray-50 border-b flex justify-start">
-                                <button onClick={() => setSession(prev => ({ ...prev, activeFindingId: null }))} className="flex items-center gap-1 text-sm text-gray-600">
-                                    <ChevronRight className="w-4 h-4 rotate-180" /> Back to Editor
-                                </button>
-                            </div>
-                            <DetailView
-                                finding={session.findings.find(f => f.target_id === session.activeFindingId)!}
-                                onAccept={handleAccept}
-                                onReject={handleReject}
+                        {/* Editor Container */}
+                        <div className="flex-1 relative bg-gray-100 overflow-hidden flex flex-col">
+                            <SuperdocEditor
+                                ref={editorRef}
+                                file={session.uploadedFile}
+                                activeFindingId={session.activeFindingId}
+                                clauseMetadata={clauseMetadata}
+                                user={editorUser}
+                                onEditorReady={() => setIsEditorReady(true)}
+                                onClearSelection={() => setSession(prev => ({ ...prev, activeFindingId: null }))}
                             />
                         </div>
-                    )}
-                </div>
 
-                {/* Debug Bottom Panel */}
-                {session.status === 'editor_debug' && (
-                    <div className="h-32 bg-gray-900 text-green-400 p-2 overflow-auto text-[10px] font-mono border-t border-gray-700 shrink-0 z-20 relative">
-                        {debugClauses.length > 0 ? (
-                            <pre>{JSON.stringify(debugClauses, null, 2)}</pre>
-                        ) : (
-                            <div className="opacity-50">Click 'Log Clauses' to inspect document structure...</div>
+                        {/* Right Sidebar (Detail) - Mobile Overlay */}
+                        {session.status !== 'editor_debug' && session.activeFindingId && (
+                            <div className="w-full md:w-[400px] shrink-0 border-l border-gray-200 shadow-xl z-40 bg-white absolute md:relative inset-y-0 right-0 flex flex-col animate-in slide-in-from-right duration-200">
+                                <div className="md:hidden p-2 bg-gray-50 border-b flex justify-start">
+                                    <button onClick={() => setSession(prev => ({ ...prev, activeFindingId: null }))} className="flex items-center gap-1 text-sm text-gray-600">
+                                        <ChevronRight className="w-4 h-4 rotate-180" /> Back to Editor
+                                    </button>
+                                </div>
+                                <DetailView
+                                    finding={session.findings.find(f => f.target_id === session.activeFindingId)!}
+                                    onAccept={handleAccept}
+                                    onReject={handleReject}
+                                />
+                            </div>
                         )}
                     </div>
-                )}
-            </div>
 
-            {/* LAYER 2: Overlay UI (Menus, Loaders, Modals) */}
-            {session.status !== 'review_ready' && session.status !== 'editor_debug' && (
-                <div className="absolute inset-0 z-40 bg-white overflow-y-auto touch-pan-y flex flex-col">
-                    {renderContent()}
-                </div>
-            )}
-
-            <SettingsModal
-                isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
-                onSave={handleSaveSettings}
-                initialSettings={appSettings}
-                isBackendKey={isBackendKey}
-            />
-
-            {!showTestRunner && (
-                <div className="fixed bottom-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-50">
-                    <button onClick={() => setShowTestRunner(true)} className="p-2 bg-gray-800 text-white rounded-full">
-                        <Bug className="w-4 h-4" />
-                    </button>
-                </div>
-            )}
-
-            {showTestRunner && (
-                <div className="fixed inset-0 z-[100] bg-white">
-                    <div className="h-full flex flex-col">
-                        <div className="bg-gray-900 text-white p-2 flex justify-between items-center">
-                            <h3 className="font-bold">System Test Suite</h3>
-                            <button onClick={() => setShowTestRunner(false)} className="text-gray-400 hover:text-white"><RotateCcw className="w-4 h-4" /></button>
+                    {/* Debug Bottom Panel */}
+                    {session.status === 'editor_debug' && (
+                        <div className="h-32 bg-gray-900 text-green-400 p-2 overflow-auto text-[10px] font-mono border-t border-gray-700 shrink-0 z-20 relative">
+                            {debugClauses.length > 0 ? (
+                                <pre>{JSON.stringify(debugClauses, null, 2)}</pre>
+                            ) : (
+                                <div className="opacity-50">Click 'Log Clauses' to inspect document structure...</div>
+                            )}
                         </div>
-                        <div className="flex-1 overflow-hidden">
-                            <TestSuiteRunner
-                                apiKey={appSettings.apiKey}
-                                onRequestApiKey={() => setIsSettingsOpen(true)}
-                                onRunExportIntegration={handleIntegrationExportTest}
-                            />
+                    )}
+                </div>
+
+                {/* LAYER 2: Overlay UI (Menus, Loaders, Modals) */}
+                {session.status !== 'review_ready' && session.status !== 'editor_debug' && (
+                    <div className="absolute inset-0 z-40 bg-white overflow-y-auto touch-pan-y flex flex-col">
+                        {renderContent()}
+                    </div>
+                )}
+
+                {!showTestRunner && (
+                    <div className="fixed bottom-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-50">
+                        <button onClick={() => setShowTestRunner(true)} className="p-2 bg-gray-800 text-white rounded-full">
+                            <Bug className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
+
+                {showTestRunner && (
+                    <div className="fixed inset-0 z-[100] bg-white">
+                        <div className="h-full flex flex-col">
+                            <div className="bg-gray-900 text-white p-2 flex justify-between items-center">
+                                <h3 className="font-bold">System Test Suite</h3>
+                                <button onClick={() => setShowTestRunner(false)} className="text-gray-400 hover:text-white"><RotateCcw className="w-4 h-4" /></button>
+                            </div>
+                            <div className="flex-1 overflow-hidden">
+                                <TestSuiteRunner
+                                    onRunExportIntegration={handleIntegrationExportTest}
+                                />
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
+            </SignedIn>
         </div>
     );
 }
