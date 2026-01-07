@@ -7,14 +7,15 @@ interface SettingsModalProps {
   onClose: () => void;
   onSave: (settings: AppSettings) => void;
   initialSettings: AppSettings;
+  isBackendKey?: boolean;
 }
 
 export interface AppSettings {
   apiKey?: string;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave, initialSettings }) => {
-  
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave, initialSettings, isBackendKey = false }) => {
+
   if (!isOpen) return null;
 
   const [apiKey, setApiKey] = useState(initialSettings.apiKey || '');
@@ -42,7 +43,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave, 
             <X className="w-5 h-5" />
           </button>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -52,13 +53,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave, 
             <input
               type="password"
               autoComplete="off"
-              placeholder="Enter your Gemini API key"
-              value={apiKey}
+              placeholder={isBackendKey ? "Provided by organization" : "Enter your Gemini API key"}
+              value={isBackendKey ? "••••••••••••••••••••••••" : apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              disabled={isBackendKey}
+              className={`w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none ${isBackendKey ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'border-gray-300'}`}
             />
             <p className="text-xs text-gray-500">
-              Stored locally in your browser. Required for live analysis, playbook generation, and AI refinements.
+              {isBackendKey ? (
+                <span className="text-green-600 font-medium">✓ API Key provided by your organization.</span>
+              ) : (
+                "Stored locally in your browser. Required for live analysis, playbook generation, and AI refinements."
+              )}
             </p>
           </div>
 

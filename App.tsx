@@ -10,7 +10,9 @@ import PlaybookEditor from './components/PlaybookEditor';
 import SuperdocEditor, { SuperdocEditorHandle } from './components/superdoc/SuperdocEditor';
 import TestSuiteRunner from './components/TestSuiteRunner';
 import SettingsModal, { AppSettings } from './components/SettingsModal';
-import { FileText, RotateCcw, CheckCircle2, ChevronRight, BookOpen, Loader2, Plus, Upload, Settings, Download, Bug, Layout, ScanEye, Wand2, Edit3, TestTube, Menu, X } from 'lucide-react';
+import { FileText, RotateCcw, CheckCircle2, ChevronRight, BookOpen, Loader2, Plus, Upload, Settings, Download, Bug, Layout, ScanEye, Wand2, Edit3, TestTube, Menu, X, LogOut, User as UserIcon } from 'lucide-react';
+import { api, User } from './services/api';
+import { AuthModal } from './components/AuthModal';
 
 export default function App() {
     const [session, setSession] = useState<ReviewSessionState>({
@@ -38,6 +40,11 @@ export default function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [appSettings, setAppSettings] = useState<AppSettings>({ apiKey: '' });
 
+    // Auth State
+    const [user, setUser] = useState<User | null>(null);
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+    const [isBackendKey, setIsBackendKey] = useState(false);
+
     // New: Clause Metadata for styling (Decoupled from findings)
     const [clauseMetadata, setClauseMetadata] = useState<Map<string, { risk: RiskLevel; status: string }>>(new Map());
 
@@ -50,25 +57,79 @@ export default function App() {
         email: 'reviewer@example.com'
     }), [session.userParty]);
 
-    // Load Settings on Mount
+    // Load Settings & Auth on Mount
     useEffect(() => {
-        const saved = localStorage.getItem('contract_ai_settings');
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                setAppSettings(parsed);
-                setGeminiApiKey(parsed.apiKey || '');
-                if (!parsed.apiKey) {
+        const init = async () => {
+            // 1. Load Local Settings
+            const saved = localStorage.getItem('contract_ai_settings');
+            let initialSettings = { apiKey: '' };
+            if (saved) {
+                try {
+                    initialSettings = JSON.parse(saved);
+                    setAppSettings(initialSettings);
+                    setGeminiApiKey(initialSettings.apiKey || '');
+                } catch (e) { console.error(e); }
+            }
+
+            // 2. Check Auth
+            if (api.isAuthenticated()) {
+                try {
+                    const currentUser = await api.getMe();
+                    setUser(currentUser);
+
+                    // 3. Try to get Backend Key
+                    try {
+                        const { apiKey } = await api.getGeminiKey();
+                        if (apiKey) {
+                            setGeminiApiKey(apiKey);
+                            setIsBackendKey(true);
+                            console.log("Using backend-provided API key");
+                            // We don't overwrite local settings, just memory/service
+                        }
+                    } catch (keyErr) {
+                        console.warn("Backend key check failed", keyErr);
+                    }
+                } catch (authErr) {
+                    api.logout(); // Token invalid
+                }
+            } else {
+                if (!initialSettings.apiKey) {
                     setIsSettingsOpen(true);
                 }
-            } catch (e) {
-                console.error("Failed to load settings", e);
-                setIsSettingsOpen(true);
             }
-        } else {
-            setIsSettingsOpen(true);
-        }
+        };
+        init();
     }, []);
+
+    const handleLoginSuccess = async () => {
+        try {
+            const currentUser = await api.getMe();
+            setUser(currentUser);
+
+            // Try to get Backend Key
+            try {
+                const { apiKey } = await api.getGeminiKey();
+                if (apiKey) {
+                    setGeminiApiKey(apiKey);
+                    setIsBackendKey(true);
+                    // Close settings if it was open for key prompt
+                    setIsSettingsOpen(false);
+                }
+            } catch (err) {
+                console.warn("No backend key available", err);
+            }
+        } catch (e) {
+            console.error("Login post-check failed", e);
+        }
+    };
+
+    const handleLogout = () => {
+        api.logout();
+        setUser(null);
+        setIsBackendKey(false);
+        // Revert to local key if exists
+        setGeminiApiKey(appSettings.apiKey || '');
+    };
 
     const handleSaveSettings = (newSettings: AppSettings) => {
         const merged = { ...appSettings, ...newSettings };
@@ -372,7 +433,7 @@ export default function App() {
             await editorRef.current.runAssemblyTestSuite();
         }
     };
-    
+
     // Integration Test
     const handleIntegrationExportTest = async (): Promise<boolean> => {
         if (!editorRef.current) return false;
@@ -485,10 +546,10 @@ export default function App() {
         if (showTestRunner) {
             return (
                 <div className="flex-1 p-4 overflow-hidden">
-                    <TestSuiteRunner 
+                    <TestSuiteRunner
                         apiKey={appSettings.apiKey}
                         onRequestApiKey={() => setIsSettingsOpen(true)}
-                        onRunExportIntegration={handleIntegrationExportTest} 
+                        onRunExportIntegration={handleIntegrationExportTest}
                     />
                 </div>
             );
@@ -740,9 +801,9 @@ export default function App() {
 
                         {/* Right side container for mobile/desktop actions */}
                         <div className="flex items-center gap-2">
-                             {/* Mobile Save Button */}
-                            <button 
-                                onClick={handleSaveAs} 
+                            {/* Mobile Save Button */}
+                            <button
+                                onClick={handleSaveAs}
                                 className="md:hidden p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
                                 title="Save Document"
                             >
@@ -753,11 +814,30 @@ export default function App() {
                             <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
                                 {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
                             </button>
-                            
+
                             {/* Desktop Actions */}
                             <div className="hidden md:flex items-center gap-2">
+                                {user ? (
+                                    <div className="flex items-center gap-2 mr-2">
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold border border-blue-200">
+                                            {user.full_name?.charAt(0) || user.email.charAt(0)}
+                                        </div>
+                                        <button onClick={handleLogout} className="text-gray-500 hover:text-red-600 text-xs font-medium">Log out</button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => setIsAuthModalOpen(true)}
+                                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium mr-2 transition-colors flex items-center gap-1"
+                                    >
+                                        <UserIcon className="w-4 h-4" /> Log In
+                                    </button>
+                                )}
+
+                                <div className="w-px h-6 bg-gray-300 mx-1"></div>
+
                                 <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
-                                    <Settings className="w-4 h-4" /> API Key
+                                    <Settings className={`w-4 h-4 ${isBackendKey ? 'text-green-500' : ''}`} />
+                                    {isBackendKey ? 'API Key (Managed)' : 'API Key'}
                                 </button>
                                 <div className="w-px h-6 bg-gray-300 mx-1"></div>
                                 <button onClick={handleSaveAs} className="p-2 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-sm font-medium">
@@ -773,6 +853,15 @@ export default function App() {
                         {/* Mobile Dropdown Menu */}
                         {mobileMenuOpen && (
                             <div className="absolute top-14 left-0 w-full bg-white shadow-lg border-b border-gray-200 p-4 flex flex-col gap-4 md:hidden z-50 animate-in slide-in-from-top-2">
+                                {user ? (
+                                    <button onClick={handleLogout} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-medium border border-gray-200">
+                                        <LogOut className="w-5 h-5" /> Log Out ({user.email})
+                                    </button>
+                                ) : (
+                                    <button onClick={() => { setIsAuthModalOpen(true); setMobileMenuOpen(false); }} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-medium border border-gray-200">
+                                        <UserIcon className="w-5 h-5" /> Log In
+                                    </button>
+                                )}
                                 <button onClick={handleRestart} className="p-3 hover:bg-gray-50 rounded text-gray-700 flex items-center gap-2 text-sm font-bold border border-gray-200">
                                     <RotateCcw className="w-5 h-5 text-red-500" /> Reset Session
                                 </button>
@@ -780,6 +869,12 @@ export default function App() {
                         )}
                     </header>
                 )}
+
+                <AuthModal
+                    isOpen={isAuthModalOpen}
+                    onClose={() => setIsAuthModalOpen(false)}
+                    onLoginSuccess={handleLoginSuccess}
+                />
 
                 <div className="flex-1 flex overflow-hidden relative">
                     {/* Left Sidebar (Findings) - Mobile Responsive */}
@@ -876,6 +971,7 @@ export default function App() {
                 onClose={() => setIsSettingsOpen(false)}
                 onSave={handleSaveSettings}
                 initialSettings={appSettings}
+                isBackendKey={isBackendKey}
             />
 
             {!showTestRunner && (
@@ -894,10 +990,10 @@ export default function App() {
                             <button onClick={() => setShowTestRunner(false)} className="text-gray-400 hover:text-white"><RotateCcw className="w-4 h-4" /></button>
                         </div>
                         <div className="flex-1 overflow-hidden">
-                            <TestSuiteRunner 
+                            <TestSuiteRunner
                                 apiKey={appSettings.apiKey}
                                 onRequestApiKey={() => setIsSettingsOpen(true)}
-                                onRunExportIntegration={handleIntegrationExportTest} 
+                                onRunExportIntegration={handleIntegrationExportTest}
                             />
                         </div>
                     </div>
